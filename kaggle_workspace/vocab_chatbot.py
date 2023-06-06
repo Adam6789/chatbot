@@ -1,9 +1,3 @@
-import torch
-from nltk.tokenize import RegexpTokenizer
-from nltk.stem import PorterStemmer
-import string
-import random
-
 class Vocab:
     def __init__(self, name):
         self.name = name

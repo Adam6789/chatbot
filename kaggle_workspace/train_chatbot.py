@@ -1,5 +1,11 @@
 import numpy as np
 import torch
+import torch.nn as nn
+from pathlib import Path
+import random
+
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
   
 def pretrain(model, vQ, vA, w2v):
     
@@ -41,96 +47,39 @@ def pretrain(model, vQ, vA, w2v):
     return model
 
 
-def train():
-    questions = src.utils.tokenize_questions(raw_questions, vocab_source)
-    answers = src.utils.tokenize_answers(raw_answers, vocab_target)
+def train(epochs, batch_size, print_each, lr, weight_decay, model, version, questions_train, answers_train, questions_valid, answers_valid, vQ, vA):  
+
+
+    batches = len(questions_train) // batch_size
     
     
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    is_cuda = torch.cuda.is_available()
-    #is_cuda = False
+    if Path(f"model_{version}.pt").is_file():
+        model.load_state_dict(torch.load(f"model_{version}.pt", map_location=torch.device('cpu')))
+        print(f"Loading from checkpoint: 'model_{version}.pt'")
+    else:
+        print(f"Nothing to load at checkpoint: 'model_{version}.pt'")
+        
+    model.to(device) 
     print(f"Computing on {device}.")
     
-    
-    # hyperparams
-    epochs = 5
-    batch_size = 64
-    print_each = 30
-    
-    lr = 0.1
-    weight_decay = 0.0
-    penalize_early_eos = 1 # the smaller the higher the penalty, i.e. the less the weight
-    
-    #hidden_size is defined at the very top
-    teacher_forcing_ratio = 0.5 # the higher the teacher_forcing_ratio, the easier it is to learn
-    dropout_E=0.5
-    dropout_D=0.0
-    
-    
-    
-    
-    
-    
-    split = int(0.98*len(questions))
-    batches = len(questions[:split]) // batch_size
-    
-    
-    
-    # model
-    input_size = len(vocab_source.words)
-    hidden_size = hidden_size
-    output_size = len(vocab_target.words)
-    model = Seq2Seq(input_size, hidden_size, output_size, vocab_source, vocab_target, glove, dropout_E, dropout_D, teacher_forcing_ratio=teacher_forcing_ratio)
-    
-    
-    v = "submission"
-    if Path(f"checkpoints/model_{v}.pt").is_file():
-        model.load_state_dict(torch.load(f"checkpoints/model_{v}.pt", map_location=torch.device('cpu')))
-        print(f"loading from checkpoint: 'checkpoints/model_{v}.pt'")
-    else:
-        print(f"nothing to load at checkpoint: 'checkpoints/model_{v}.pt'")
-    v="submission"
-    
-    
-    
-    
-    model.to(device)
-    # training
-    
-    
     optim = torch.optim.SGD(model.parameters(), lr=lr, weight_decay=weight_decay)
-    weight = torch.Tensor([1]*output_size).to(device)
-    weight[2]=penalize_early_eos
-    loss_fn = nn.NLLLoss(weight=weight)
+    loss_fn = nn.NLLLoss()
     
     epoch = 0
-    missed = 0
     for epoch in range(epochs):
         train_loss = 0
-        for i, (batch_q, batch_a) in enumerate(zip(src.utils.heteroDataLoader(questions[:split],batch_size), src.utils.heteroDataLoader(answers[:split],batch_size))):   
-            #print(i,"yes")
-            # training loop
+        for i, (batch_q, batch_a) in enumerate(zip(heteroDataLoader(questions_train,batch_size), heteroDataLoader(answers_train,batch_size))):   
             model.train()
             batch_loss = 0
     
             for m, (q, a) in enumerate(zip(batch_q, batch_a)):  
-                start = next(iter(torch.LongTensor([vocab_target.words["<SOS>"]])))
-                start.to(device)
-                a=a.to(device)
-                q=q.to(device)
-                output = model(q,a,start)
+                output = model(q,a)
                 output.to(device)
                 model.to(device)
-                try:
-                    loss = loss_fn(output,a)
-                except:
-                    print(f"Loss could not be computed for: {output} with shape {output.shape}.")
-                    print(f"Question: {q}")
-                    print(f"Answer: {a}")
-                    print(f"Old loss will be used with the value of {loss}.")
-                    loss = loss
-                    
-                batch_loss += loss
+                loss = loss_fn(output,a)
+
+                
+            batch_loss += loss
     
             batch_loss = batch_loss/batch_size
             batch_loss.backward()
@@ -138,60 +87,73 @@ def train():
             optim.zero_grad()
             train_loss+=batch_loss
        
-            #print(i)
-            if i % print_each== 0:
-                print("batch:", f"{i}/{batches}")
+
     
         
                 
-            if i % (print_each * 2) == 0:
+            if i % (print_each) == 0:
                 valid_loss = 0
-                for n, (batch_q, batch_a) in enumerate(zip(src.utils.heteroDataLoader(questions[split:],batch_size), src.utils.heteroDataLoader(answers[split:],batch_size))):     
+                for n, (batch_q, batch_a) in enumerate(zip(heteroDataLoader(questions_valid,batch_size), heteroDataLoader(answers_valid,batch_size))):     
                     # evaluation loop
                     model.eval()
                     batch_loss = 0
                     for q, a in zip(batch_q, batch_a):      
-                        start = next(iter(torch.LongTensor([vocab_target.words["<SOS>"]])))
-                        q,a,start = q.to(device),a.to(device),start.to(device)
                         assert len(q.shape) ==1, f"Answer must be 1-dimensional. But {q.shape}"
                         assert len(a.shape) ==1, f"Answer must be 1-dimensional. But {a.shape}"
-                        output = model(q,a,start)
+                        output = model(q,a)
                         try:
                             loss = loss_fn(output,a)
                         except:
-                            missed = missed +1
-    #                         print(f"Loss could not be computed for: {output} with shape {output.shape}.")
-    #                         print(f"Question: {q}")
-    #                         print(f"Answer: {a}")
-    #                         print(f"Old loss will be used with the value of {loss}.")
+                            print("could not be computed for:", q, a, output)
                             loss = loss
                         batch_loss += loss
      
-                    valid_loss += batch_loss / batch_size
-                valid_loss = round(valid_loss.item() / (len(questions[split:])//batch_size),3)
-                train_loss = round(train_loss.item() / ((i+1)*5),3)
-    
-                print(" ")
-                
+                valid_loss += batch_loss / batch_size
+                valid_loss = round(valid_loss.item() / (len(questions_valid)//batch_size),3)
+                train_loss = round(train_loss.item() / ((i+1)*5),3)    
                 print("epoch:", epoch,"batch:", f"{i}/{batches}","train_loss:",train_loss, "valid_loss", valid_loss)
+                
+                randint = random.randint(0, len(questions_valid)-1)
+                question = questions_valid[randint]
+                answer = answers_valid[randint]
+                prediction = model(question, answer)
                 text = ""
-                for x in q:
-                    text += vocab_source.index[str(x.item())] + " "
+                for x in question:
+                    text += vQ.index[str(x.item())] + " "
                 print("question:",text)
                 text = ""
-                for x in a:
-                    text += vocab_target.index[str(x.item())] + " "
+                for x in answer:
+                    text += vA.index[str(x.item())] + " "
                 print("answer:", text)
                 text = ""
-                for x in output:
-                    text += vocab_target.index[str(torch.argmax(x,dim=0).item())] + " "
+                for x in prediction:
+                    text += vA.index[str(torch.argmax(x,dim=0).item())] + " "
                 print("prediction:", text)
-                torch.save(model.state_dict(),f"checkpoints/model_{v}.pt")
-                print(f"{missed}/{print_each * 2 * batch_size} samples could not be considered.")
+
+                
+                torch.save(model.state_dict(),f"model_{version}.pt")
                 print("Saved model.")
                 print("")
-                missed = 0
                 train_loss = 0
+                
+def heteroDataLoader(single_samples, batch_size, shuffle = True):
+
+    """
+    Inputs:
+    -------
+    dataset: list
+        A list of single samples.
+    Outputs:
+    --------
+    batches: list
+        A list of lists with each having multiple samples.
+    """
+    len_batches = len(single_samples) // batch_size
+    random.shuffle(single_samples)
+    batches = []
+    for i in range(len_batches):
+        batches.append(single_samples[i*batch_size:(i+1)*batch_size])
+    return batches
                 
                 
                       

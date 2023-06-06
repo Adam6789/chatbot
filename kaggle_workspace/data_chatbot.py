@@ -6,12 +6,11 @@ import string
 import ast
 import matplotlib.pyplot as plt
 from nltk.corpus import brown
-from nltk.tokenize import RegexpTokenizer
-from nltk.stem import *
 import torch
 import nltk
 import gensim
 import random
+from sklearn.utils import shuffle
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -46,33 +45,30 @@ def load_df(init=True, source_name="squad1"):
             df_names = pd.read_csv('names.csv')
             poc_questions = []
             poc_answers = []
-            for i, row in list(df_names.iterrows())[:90]:
+            for i, row in list(df_names.iterrows())[:25]:
                 poc_questions.append("What is your name?")
                 name = row["First Name"]+" "+row["Last Name"]
                 poc_answers.append(f"['My name is {name}']")
-            for i, row in list(df_names.iterrows())[90:]:
-                poc_questions.append("What is your name?")
-                name = row["First Name"]+" "+row["Last Name"]
-                poc_answers.append(f"['{name}']")
-            for i in range(100):
+            for i in range(25):
                 poc_questions.append("What is your name?")
                 one = random.randint(0,99)
                 two = random.randint(0,99)
                 name_one = df_names["First Name"].iloc[one]+" "+df_names["Last Name"].iloc[two]
                 name_two = df_names["First Name"].iloc[two]+" "+df_names["Last Name"].iloc[two]
                 poc_answers.append(f"['Our name is {name_one} and {name_two}']")
-            for i, row in list(df_names.iterrows()):
-                poc_questions.append("What is her name?")
+            for i, row in list(df_names.iterrows()):     
                 name = row["First Name"]+" "+row["Last Name"]
                 if row["Gender"] == "Female":
+                    poc_questions.append("What is her name?")
                     poc_answers.append(f"['Her name is {name}']")
             for i, row in list(df_names.iterrows()):
-                poc_questions.append("What is his name?")
                 name = row["First Name"]+" "+row["Last Name"]
                 if row["Gender"] == "Male":
+                    poc_questions.append("What is his name?")
                     poc_answers.append(f"['His name is {name}']")
             df_train = pd.DataFrame(list(zip(poc_questions, poc_answers)),
                            columns =['question', 'answer'])
+            df_train = shuffle(df_train)
             df_train.to_csv('poc_data.csv')
         # load data
         df_train = pd.read_csv('poc_data.csv')
@@ -90,7 +86,7 @@ def prepare_text(sentence):
     return tokens
     
 
-def train_valid_split(SRC, TRG, share=0.1):
+def train_valid_split(SRC, TRG, share=0.8):
 
     '''
     Input: SRC, our list of questions from the dataset
@@ -143,8 +139,8 @@ def tokenize_questions(sentences, vocab):
                 print(f"Word {word} is not part of the vocabulary!")
             tokenized_sentence.append(digit)
         # the following line is the only difference in comparison to tokenize_answers()
-        tokenized_sentence = tokenized_sentence + [vocab.words["<EOS>"]] 
-        tokenized_sentences.append(torch.LongTensor(tokenized_sentence).to(device).view(1,-1))
+        tokenized_sentence = [vocab.words["<SOS>"]] + tokenized_sentence + [vocab.words["<EOS>"]] 
+        tokenized_sentences.append(torch.LongTensor(tokenized_sentence).to(device))
     return tokenized_sentences
 
 def tokenize_answers(sentences, vocab):
@@ -157,8 +153,8 @@ def tokenize_answers(sentences, vocab):
             except:
                 print(f"Word {word} is not part of the vocabulary!")
             tokenized_sentence.append(digit)
-        tokenized_sentence = [vocab.words["<SOS>"]] + tokenized_sentence + [vocab.words["<EOS>"]] 
-        tokenized_sentences.append(torch.LongTensor(tokenized_sentence).to(device).view(1,-1))
+        tokenized_sentence =  tokenized_sentence + [vocab.words["<EOS>"]] 
+        tokenized_sentences.append(torch.LongTensor(tokenized_sentence).to(device))
     return tokenized_sentences
 
 def pretrained_w2v(init):
@@ -192,24 +188,7 @@ def pretrained_w2v(init):
 #         new_questions.append(torch.LongTensor(new_question))
 #     return new_questions
 
-# def heteroDataLoader(single_samples, batch_size, shuffle = True):
 
-#     """
-#     Inputs:
-#     -------
-#     dataset: list
-#         A list of single samples.
-#     Outputs:
-#     --------
-#     batches: list
-#         A list of lists with each having multiple samples.
-#     """
-#     len_batches = len(single_samples) // batch_size
-#     random.shuffle(single_samples)
-#     batches = []
-#     for i in range(len_batches):
-#         batches.append(single_samples[i*batch_size:(i+1)*batch_size])
-#     return batches
         
 
     
